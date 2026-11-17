@@ -1,7 +1,7 @@
 # Web
 fastapi
 uvicorn[standard]
-qrcode # Used to show the url for the phone
+qrcode[pil] # Used to show the url for the phone
 
 # Transcription
 faster-whisper

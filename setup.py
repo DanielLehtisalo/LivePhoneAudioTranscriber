@@ -42,6 +42,9 @@ def main():
                 [openssl_path, "genrsa", "-out", f"{CERT_DIR}/key.pem", "2048"]
             )
             print("Created private key.")
+        else:
+            print("Skipped creating private key.")
+
         if not os.path.exists(f"{CERT_DIR}/signreq.csr"):
             subprocess.run(
                         [openssl_path, "req", "-new", 
@@ -51,6 +54,9 @@ def main():
                         ] 
                     )
             print("Created signreq with blank details, if you wish to fill these in edit this script.")
+        else:
+            print("Skipped creating signreq.")
+
         if not os.path.exists(f"{CERT_DIR}/certificate.pem"):
             subprocess.run(
                             [openssl_path, "x509", "-req", 
@@ -61,7 +67,10 @@ def main():
                             ]
                     )
             print("Created certificate.")
-                
+        else:
+            print("Skipped creating certificate.")
+            
+        print("Setup completed.")
     else:
         print("OpenSSL is not installed, please install it and add it to the system path.")
 
