@@ -8,6 +8,7 @@ import wave
 import time
 import uuid
 from datetime import datetime, timezone
+import asyncio
 
 import qrcode
 
@@ -15,19 +16,26 @@ import numpy as np
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-
+from transcriber import Transcriber
+from segmenter import Segmenter
+from contextlib import asynccontextmanager
 
 BASE_DIR = Path(os.getcwd())
 STATIC_DIR = BASE_DIR / "static"
 CERT_DIR = BASE_DIR / "certs"
 SESSIONS_DIR = BASE_DIR / "sessions"
+MODELS_DIR = BASE_DIR / "models"
+MODEL_PATH = MODELS_DIR / "large-v3-turbo"
 
 HEADER = struct.Struct("<Id")
 
-active_session = None
+
+
+
 
 def get_lan_ip():
     try:
@@ -37,9 +45,72 @@ def get_lan_ip():
     except OSError:
         return "127.0.0.1"
 
-app = FastAPI()
+
+
+active_session = None
+transcriber = Transcriber()
+
+@asynccontextmanager
+async def lifespan(app):
+    transcriber.start(MODEL_PATH)
+    print("Starting transcriber...")
+    await transcriber.warm_up()
+    print("Transcriber warmed up.")
+    yield
+    transcriber.stop()
+
+app = FastAPI(lifespan=lifespan)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+async def transcription_task(queue, transcript_path, ws):
+    client_connected = True
+
+    async def send_to_client(payload):
+        nonlocal client_connected
+        if not client_connected:
+            return
+        try:
+            if ws.application_state == WebSocketState.CONNECTED:
+                await ws.send_json(payload)
+            else:
+                client_connected = False
+        except (WebSocketDisconnect, RuntimeError):
+            client_connected = False
+    
+    with open(transcript_path, "a", encoding="utf-8") as out:
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            start_sample, audio = item
+            offset = start_sample / 16000
+
+            try:
+                result = await transcriber.run(audio, language=None)
+            except:
+                print("Transcription failure.")
+                continue
+            for seg in result["segments"]:
+                seg["start"] += offset
+                seg["end"] += offset
+                for w in seg["words"]:
+                    w["start"] += offset
+                    w["end"] += offset
+                out.write(json.dumps(seg, ensure_ascii=False) + "\n")
+
+            for seg in result["segments"]:
+                await send_to_client({
+                    "type": "segment",
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg["text"],
+                })
+            
+            out.flush()
+        out.close()
+
 
 @app.get("/")
 async def index():
@@ -77,6 +148,13 @@ async def audio_ws(ws: WebSocket):
                 if data["type"] == "start":
                     sample_rate = data["sampleRate"]
 
+                    queue = asyncio.Queue()
+                    task = asyncio.create_task(
+                        transcription_task(queue, session_dir / "transcript_live.jsonl", ws)
+                    )
+
+                    segmenter = Segmenter(sample_rate, on_segment=lambda s, audio: queue.put_nowait((s, audio)))
+
                     wav = wave.open(str(session_dir / "original-audio.wav"), "wb")
                     wav.setnchannels(1)
                     wav.setsampwidth(2)
@@ -107,6 +185,7 @@ async def audio_ws(ws: WebSocket):
 
                 samples = np.frombuffer(audio, dtype="<i2")
                 wav.writeframes(audio)
+                segmenter.feed(audio)
 
     except WebSocketDisconnect:
         if(wav):
@@ -118,6 +197,8 @@ async def audio_ws(ws: WebSocket):
         active_session = None
         last_arrival = None
         expected_seq = 0
+        segmenter.finish()
+        await queue.put(None)
         print("Session closed.")
 
 def main():

@@ -4,8 +4,8 @@ Transcribe audio from a phone in the local network live, without installing any 
 Please do not run LPAT without informing everyone present as most jurisdictions require you to get consent for recording from all parties being recorded.
 
 ## Running
-- Run install-dependencies.py
-- Run LPAT.py
+- Run setup.py
+- Run lpat.py
 
 ## Goals
 - Get live audio from a browser (phones especially) to a server.
@@ -13,3 +13,5 @@ Please do not run LPAT without informing everyone present as most jurisdictions 
 
 ## Considerations & future improvements
 - Anyone on the local network is able to start a session, this should be relatively simple to fix.
+- Automatic language detection and switching to a more specialized model.
+- Automatic translation into a target language.

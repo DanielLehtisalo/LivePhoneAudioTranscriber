@@ -1,6 +1,7 @@
 const start_btn = document.getElementById("start");
 const stop_btn = document.getElementById("stop");
 const status_field = document.getElementById("status");
+const transcript_field = document.getElementById("transcript");
 
 // uint32 sequence num + float64 timestamp from phone
 const HEADER_BYTES = 12;
@@ -12,6 +13,7 @@ start_btn.onclick = async () =>
 {
     start_btn.disabled = true;
     status_field.textContent = "Starting";
+    transcript_field.textContent = '';
     try
     {
         status_field.textContent = "Awaiting microphone...";
@@ -59,6 +61,17 @@ start_btn.onclick = async () =>
         node.port.onmessage = (e) => sendChunk(e.data);
         source.connect(node);
         node.connect(ctx.destination);
+
+        ws.onmessage = (e) => 
+        {
+            const msg = JSON.parse(e.data);
+            if (msg.type === "segment")
+            {
+                const p = document.createElement("p");
+                p.textContent = msg.text;
+                transcript_field.appendChild(p);
+            }
+        }
 
         ws.onclose = () => stop("Disconnected");
 
