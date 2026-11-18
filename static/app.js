@@ -1,9 +1,10 @@
 const start_btn = document.getElementById("start");
 const stop_btn = document.getElementById("stop");
+const status_field = document.getElementById("status");
 
 // uint32 sequence num + float64 timestamp from phone
 const HEADER_BYTES = 12;
-let ctx, stream, node, ws, wakeLock;
+let ctx, audio_stream, node, ws, wakeLock;
 let seq = 0;
 let running = false;
 
@@ -12,7 +13,7 @@ start_btn.onclick = async () =>
     start_btn.disabled = true;
     try
     {
-        stream = await navigator.mediaDevices.getUserMedia(
+        audio_stream = await navigator.mediaDevices.getUserMedia(
             {
                 audio:
                 {
@@ -25,6 +26,7 @@ start_btn.onclick = async () =>
         );
 
         ctx = new AudioContext();
+        ctx.resume() // Mobile browser fix
         await ctx.audioWorklet.addModule("/static/audio-worklet.js");
 
         ws = new WebSocket(`wss://${location.host}/ws`);
@@ -35,8 +37,9 @@ start_btn.onclick = async () =>
             ws.onerror = () => reject(new Error("Websocket failed"))
         }
         );
+        running = true;
 
-        const track = stream.getAudioTracks()[0];
+        const track = audio_stream.getAudioTracks()[0];
         ws.send(JSON.stringify(
             {
                 type: "start",
@@ -47,6 +50,12 @@ start_btn.onclick = async () =>
             }
         ));
 
+        const source = ctx.createMediaStreamSource(audio_stream);
+        node = new AudioWorkletNode(ctx, "audio-capture");
+        node.port.onmessage = (e) => sendChunk(e.data);
+        source.connect(node);
+        node.connect(ctx.destination);
+
         ws.onclose = () => stop("Disconnected");
 
         if ("wakeLock" in navigator)
@@ -55,17 +64,17 @@ start_btn.onclick = async () =>
             wakeLock = await navigator.wakeLock.request("screen").catch(() => null);
         }
 
-        running = true;
         stop_btn.disabled = false;
     }
     catch (err)
     {
+        status_field.textContent = `Error: ${err.message ?? err}`
         cleanup();
         start_btn.disabled = false;
     }
 };
 
-stop_btn.onclick = () => stop("Stopped");
+stop_btn.onclick = () => { stop("Stopped"); }
 
 function sendChunk(chunk)
 {
@@ -92,6 +101,10 @@ function stop(reason)
         ws.send(JSON.stringify({ type: "stop", clientTime: Date.now()}));
         ws.close();
     }
+    if (reason)
+    {
+        status_field.textContent = reason
+    }
     cleanup();
     stop_btn.disabled = true;
     start_btn.disabled = false;
@@ -100,8 +113,8 @@ function stop(reason)
 function cleanup()
 {
     node?.disconnect();
-    stream?.getAudioTracks().forEach((t) => t.stop());
+    audio_stream?.getAudioTracks().forEach((t) => t.stop());
     ctx?.close();
     wakeLock?.release();
-    node = stream = ctx = wakeLock = null;
+    node = audio_stream = ctx = wakeLock = null;
 }

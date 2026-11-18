@@ -79,6 +79,8 @@ async def audio_ws(ws: WebSocket):
                 seq, client_ms = HEADER.unpack_from(raw)
                 audio = raw[HEADER.size:]
 
+                print(audio[0])
+
                 if seq != expected_seq:
                     # TODO log properly
                     print(f"Gap detected, expected {expected_seq} got {seq}")
