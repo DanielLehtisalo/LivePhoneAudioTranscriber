@@ -18,7 +18,7 @@ class AudioCapture extends AudioWorkletProcessor
                 const s = Math.max(-1, Math.min(1, ch[i]));
                 // Convenient conversion from float32 to int16 from here 
                 // https://stackoverflow.com/questions/33738873/float32-to-int16-javascript-web-audio-api
-                this.buf[this.pos] = s < 0 ? s * 0x8000 : s * 0x7ffff;
+                this.buf[this.pos] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                 this.pos++;
                 if (this.pos == this.size)
                 {

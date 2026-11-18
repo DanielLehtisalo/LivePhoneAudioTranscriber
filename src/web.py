@@ -5,6 +5,9 @@ import struct
 import json
 import socket
 import wave
+import time
+import uuid
+from datetime import datetime, timezone
 
 import qrcode
 
@@ -20,8 +23,11 @@ from fastapi.staticfiles import StaticFiles
 BASE_DIR = Path(os.getcwd())
 STATIC_DIR = BASE_DIR / "static"
 CERT_DIR = BASE_DIR / "certs"
+SESSIONS_DIR = BASE_DIR / "sessions"
 
 HEADER = struct.Struct("<Id")
+
+active_session = None
 
 def get_lan_ip():
     try:
@@ -41,7 +47,20 @@ async def index():
 
 @app.websocket("/ws")
 async def audio_ws(ws: WebSocket):
+    global active_session
+    last_arrival = time.monotonic()
     await ws.accept()
+
+    if active_session is not None:
+        await ws.close(reason="Another session is running.")
+        return
+
+    session_id = uuid.uuid4().hex
+    active_session = session_id
+    started = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    session_dir = SESSIONS_DIR / f"{started}_{session_id}"
+    session_dir.mkdir(parents=True)
+
     sample_rate = None
     wav = None
     expected_seq = 0
@@ -49,9 +68,7 @@ async def audio_ws(ws: WebSocket):
         while True:
             msg = await ws.receive()
             if msg["type"] == "websocket.disconnect":
-                if(wav):
-                    wav.close() # temp close
-
+                print("Websocket disconnected.")
                 # TODO log properly
                 break
 
@@ -60,8 +77,7 @@ async def audio_ws(ws: WebSocket):
                 if data["type"] == "start":
                     sample_rate = data["sampleRate"]
 
-                    # Temporary writing solution
-                    wav = wave.open("test.wav", "wb")
+                    wav = wave.open(str(session_dir / "original-audio.wav"), "wb")
                     wav.setnchannels(1)
                     wav.setsampwidth(2)
                     wav.setframerate(sample_rate)
@@ -69,17 +85,13 @@ async def audio_ws(ws: WebSocket):
                     # TODO log properly
                     print("Session start:", data)
                 elif data["type"] == "stop":
-                    if(wav):
-                        wav.close() # temp close
-                    
                     # TODO log properly
+                    print("Stop pressed")
                     break
             elif msg.get("bytes") is not None:
                 raw = msg["bytes"]
                 seq, client_ms = HEADER.unpack_from(raw)
                 audio = raw[HEADER.size:]
-
-                print(audio[0])
 
                 if seq != expected_seq:
                     # TODO log properly
@@ -95,6 +107,12 @@ async def audio_ws(ws: WebSocket):
         if(wav):
             wav.close() # temp close
         pass
+    finally:
+        if wav:
+            wav.close()
+        active_session = None
+        expected_seq = 0
+        print("Session closed.")
 
 def main():
     ip = get_lan_ip()
