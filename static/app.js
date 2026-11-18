@@ -11,8 +11,10 @@ let running = false;
 start_btn.onclick = async () =>
 {
     start_btn.disabled = true;
+    status_field.textContent = "Starting";
     try
     {
+        status_field.textContent = "Awaiting microphone...";
         audio_stream = await navigator.mediaDevices.getUserMedia(
             {
                 audio:
@@ -24,13 +26,14 @@ start_btn.onclick = async () =>
                 },
             }
         );
-
+        status_field.textContent = "Adding audio worker...";
         ctx = new AudioContext();
         ctx.resume() // Mobile browser fix
         await ctx.audioWorklet.addModule("/static/audio-worklet.js");
 
         ws = new WebSocket(`wss://${location.host}/ws`);
         ws.binaryType = "arraybuffer";
+        status_field.textContent = "Awaiting connection...";
         await new Promise((resolve, reject) =>
         {
             ws.onopen = resolve;
@@ -39,6 +42,7 @@ start_btn.onclick = async () =>
         );
         running = true;
 
+        status_field.textContent = "Connected";
         const track = audio_stream.getAudioTracks()[0];
         ws.send(JSON.stringify(
             {
@@ -116,5 +120,6 @@ function cleanup()
     audio_stream?.getAudioTracks().forEach((t) => t.stop());
     ctx?.close();
     wakeLock?.release();
+    seq = 0;
     node = audio_stream = ctx = wakeLock = null;
 }

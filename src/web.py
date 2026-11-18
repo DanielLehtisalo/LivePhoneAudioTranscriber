@@ -48,7 +48,7 @@ async def index():
 @app.websocket("/ws")
 async def audio_ws(ws: WebSocket):
     global active_session
-    last_arrival = time.monotonic()
+    last_arrival = None
     await ws.accept()
 
     if active_session is not None:
@@ -98,7 +98,12 @@ async def audio_ws(ws: WebSocket):
                     print(f"Gap detected, expected {expected_seq} got {seq}")
                 expected_seq = seq + 1
 
-                # TODO detect chunks that took too long to arrive, even with the correct index
+                if last_arrival is not None:
+                    diff = time.monotonic() - last_arrival
+                    if abs(diff - 0.1) > 0.025:
+                        # TODO log properly
+                        print(f"Packet timing is outside of tolerances. Got {diff}s, expected 0.1s. Seq: {seq}")
+                last_arrival = time.monotonic()
 
                 samples = np.frombuffer(audio, dtype="<i2")
                 wav.writeframes(audio)
@@ -111,6 +116,7 @@ async def audio_ws(ws: WebSocket):
         if wav:
             wav.close()
         active_session = None
+        last_arrival = None
         expected_seq = 0
         print("Session closed.")
 

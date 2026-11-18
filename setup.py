@@ -3,11 +3,15 @@ import subprocess
 import sys
 import venv
 import shutil
+import json
+from faster_whisper import download_model
 
 VENV_DIR = "venv"
 CERT_DIR = "certs"
+MODELS_DIR = "models"
 CERT_DURATION = 365
 
+MODELS = ["large-v3-turbo"]
 
 def main():
     if not os.path.exists(VENV_DIR):
@@ -68,12 +72,16 @@ def main():
                     )
             print("Created certificate.")
         else:
-            print("Skipped creating certificate.")
-            
-        print("Setup completed.")
+            print("Skipped creating certificate.")   
+        
     else:
         print("OpenSSL is not installed, please install it and add it to the system path.")
 
+    print("Downloading missing transcription models. This might take a while.")
+    for name in MODELS:
+        download_model(name, output_dir=f"{MODELS_DIR}/{name}")
+    print("All models downloaded.")
+    print("Setup completed.")
 
 if __name__ == "__main__":
     main()

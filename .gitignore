@@ -1,6 +1,6 @@
 certs/
 sessions/
-test.wav
+models/
 
 
 # Below is a template python gitignore from
