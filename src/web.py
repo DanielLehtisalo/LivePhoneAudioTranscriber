@@ -1,14 +1,27 @@
 from pathlib import Path
 
 import os
+import struct
+import json
 import socket
+import wave
 
 import qrcode
+
+import numpy as np
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+
+
+
+BASE_DIR = Path(os.getcwd())
+STATIC_DIR = BASE_DIR / "static"
+CERT_DIR = BASE_DIR / "certs"
+
+HEADER = struct.Struct("<Id")
 
 def get_lan_ip():
     try:
@@ -18,15 +31,68 @@ def get_lan_ip():
     except OSError:
         return "127.0.0.1"
 
-BASE_DIR = Path(os.getcwd())
-STATIC_DIR = BASE_DIR / "static"
-CERT_DIR = BASE_DIR / "certs"
-
 app = FastAPI()
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+@app.websocket("/ws")
+async def audio_ws(ws: WebSocket):
+    await ws.accept()
+    sample_rate = None
+    wav = None
+    expected_seq = 0
+    try:
+        while True:
+            msg = await ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                if(wav):
+                    wav.close() # temp close
+
+                # TODO log properly
+                break
+
+            if msg.get("text") is not None:
+                data = json.loads(msg["text"])
+                if data["type"] == "start":
+                    sample_rate = data["sampleRate"]
+
+                    # Temporary writing solution
+                    wav = wave.open("test.wav", "wb")
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(sample_rate)
+
+                    # TODO log properly
+                    print("Session start:", data)
+                elif data["type"] == "stop":
+                    if(wav):
+                        wav.close() # temp close
+                    
+                    # TODO log properly
+                    break
+            elif msg.get("bytes") is not None:
+                raw = msg["bytes"]
+                seq, client_ms = HEADER.unpack_from(raw)
+                audio = raw[HEADER.size:]
+
+                if seq != expected_seq:
+                    # TODO log properly
+                    print(f"Gap detected, expected {expected_seq} got {seq}")
+                expected_seq = seq + 1
+
+                # TODO detect chunks that took too long to arrive, even with the correct index
+
+                samples = np.frombuffer(audio, dtype="<i2")
+                wav.writeframes(audio)
+
+    except WebSocketDisconnect:
+        if(wav):
+            wav.close() # temp close
+        pass
 
 def main():
     ip = get_lan_ip()
