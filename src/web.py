@@ -24,6 +24,8 @@ from transcriber import Transcriber
 from segmenter import Segmenter
 from contextlib import asynccontextmanager
 
+import records as r
+
 BASE_DIR = Path(os.getcwd())
 STATIC_DIR = BASE_DIR / "static"
 CERT_DIR = BASE_DIR / "certs"
@@ -32,9 +34,6 @@ MODELS_DIR = BASE_DIR / "models"
 MODEL_PATH = MODELS_DIR / "large-v3-turbo"
 
 HEADER = struct.Struct("<Id")
-
-
-
 
 
 def get_lan_ip():
@@ -48,14 +47,15 @@ def get_lan_ip():
 
 
 active_session = None
+log = None
 transcriber = Transcriber()
 
 @asynccontextmanager
 async def lifespan(app):
     transcriber.start(MODEL_PATH)
-    print("Starting transcriber...")
+    r.sys_log().info("Starting transcriber...")
     await transcriber.warm_up()
-    print("Transcriber warmed up.")
+    r.sys_log().info("Transcriber ready.")
     yield
     transcriber.stop()
 
@@ -66,6 +66,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 async def transcription_task(queue, transcript_path, ws):
     client_connected = True
+    global log
 
     async def send_to_client(payload):
         nonlocal client_connected
@@ -90,7 +91,7 @@ async def transcription_task(queue, transcript_path, ws):
             try:
                 result = await transcriber.run(audio, language=None)
             except:
-                print("Transcription failure.")
+                log.warning("Transcription failed.")
                 continue
             for seg in result["segments"]:
                 seg["start"] += offset
@@ -119,10 +120,12 @@ async def index():
 @app.websocket("/ws")
 async def audio_ws(ws: WebSocket):
     global active_session
+    global log
     last_arrival = None
     await ws.accept()
 
     if active_session is not None:
+        r.sys_log().warning("Another client tried to connect while session was running.")
         await ws.close(reason="Another session is running.")
         return
 
@@ -132,15 +135,17 @@ async def audio_ws(ws: WebSocket):
     session_dir = SESSIONS_DIR / f"{started}_{session_id}"
     session_dir.mkdir(parents=True)
 
+    log = r.start_logging(active_session, session_dir)
+
     sample_rate = None
     wav = None
     expected_seq = 0
+    queue = asyncio.Queue()
     try:
         while True:
             msg = await ws.receive()
             if msg["type"] == "websocket.disconnect":
-                print("Websocket disconnected.")
-                # TODO log properly
+                log.info("Websocket disconnected.")
                 break
 
             if msg.get("text") is not None:
@@ -148,8 +153,7 @@ async def audio_ws(ws: WebSocket):
                 if data["type"] == "start":
                     sample_rate = data["sampleRate"]
 
-                    queue = asyncio.Queue()
-                    task = asyncio.create_task(
+                    asyncio.create_task(
                         transcription_task(queue, session_dir / "transcript_live.jsonl", ws)
                     )
 
@@ -160,36 +164,36 @@ async def audio_ws(ws: WebSocket):
                     wav.setsampwidth(2)
                     wav.setframerate(sample_rate)
 
-                    # TODO log properly
-                    print("Session start:", data)
+                    r.sys_log().info("Start received.")
+                    log.info(f"Start received. Original request data: {data}")
                 elif data["type"] == "stop":
-                    # TODO log properly
-                    print("Stop pressed")
+                    r.sys_log().info("Stop received.")
+                    log.info(f"Stop received. Original request data: {data}")
                     break
+            
             elif msg.get("bytes") is not None:
                 raw = msg["bytes"]
                 seq, client_ms = HEADER.unpack_from(raw)
                 audio = raw[HEADER.size:]
 
+                log.info(f"Data rx: {raw}")
+
                 if seq != expected_seq:
-                    # TODO log properly
-                    print(f"Gap detected, expected {expected_seq} got {seq}")
+                    log.warning(f"Gap detected, expected {expected_seq} got {seq}")
                 expected_seq = seq + 1
 
                 if last_arrival is not None:
                     diff = time.monotonic() - last_arrival
                     if abs(diff - 0.1) > 0.025:
-                        # TODO log properly
-                        print(f"Packet timing is outside of tolerances. Got {diff}s, expected 0.1s. Seq: {seq}")
+                        log.warning(f"Packet timing is outside of tolerances. Got {diff}s, expected 0.1s. Seq: {seq}")
                 last_arrival = time.monotonic()
 
-                samples = np.frombuffer(audio, dtype="<i2")
                 wav.writeframes(audio)
                 segmenter.feed(audio)
 
     except WebSocketDisconnect:
         if(wav):
-            wav.close() # temp close
+            wav.close()
         pass
     finally:
         if wav:
@@ -199,7 +203,8 @@ async def audio_ws(ws: WebSocket):
         expected_seq = 0
         segmenter.finish()
         await queue.put(None)
-        print("Session closed.")
+        r.end_logging()
+        log = None
 
 def main():
     ip = get_lan_ip()
