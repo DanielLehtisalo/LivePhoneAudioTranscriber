@@ -7,6 +7,7 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 import numpy as np
+import json
 
 _model = None
 
@@ -56,9 +57,16 @@ def transcribe(audio, language=None, initial_prompt=None):
         "segments": out,
     }
 
+_transcriber = None
+from log import sys_log as sl
+
 class Transcriber:
     def __init__(self):
+        global _transcriber
+        if _transcriber is not None:
+            sl().warning("A transcriber already exists, but it was replaced.")
         self._executor = None
+        _transcriber = self
 
     def start(self, MODEL_PATH):
         self._executor = ProcessPoolExecutor(
@@ -84,3 +92,58 @@ class Transcriber:
 
     def stop(self):
         self._executor.shutdown(wait=True, cancel_futures=True)
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
+
+async def transcription_task(queue, transcript_path, ws):
+    client_connected = True
+
+    async def send_to_client(payload):
+        nonlocal client_connected
+        if not client_connected:
+            return
+        try:
+            if ws.application_state == WebSocketState.CONNECTED:
+                await ws.send_json(payload)
+            else:
+                client_connected = False
+        except (WebSocketDisconnect, RuntimeError):
+            client_connected = False
+    
+    with open(transcript_path, "a", encoding="utf-8") as out:
+        global _transcriber
+        if _transcriber is None:
+            if sl() is not None:
+                sl().warning("No transcriber initialized.")
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            start_sample, audio = item
+            offset = start_sample / 16000
+
+            try:
+                result = await _transcriber.run(audio, language=None)
+            except:
+                sl().warning("Transcription failed.")
+                out.write("(Failed to transcribe)\n")
+                continue
+            for seg in result["segments"]:
+                seg["start"] += offset
+                seg["end"] += offset
+                for w in seg["words"]:
+                    w["start"] += offset
+                    w["end"] += offset
+                out.write(json.dumps(seg, ensure_ascii=False) + "\n")
+
+            for seg in result["segments"]:
+                await send_to_client({
+                    "type": "segment",
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg["text"],
+                })
+            
+            out.flush()
+        out.close()

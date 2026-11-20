@@ -1,0 +1,7 @@
+- LPAT
+    - Server
+        - Transcriber
+        - Session(s)
+            - Segmenter
+            - Audio processor
+    - Logging
