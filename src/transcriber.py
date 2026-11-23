@@ -46,6 +46,8 @@ def transcribe(audio, language=None, initial_prompt=None):
             "text": s.text.strip(),
             "avg_logprob": s.avg_logprob,
             "no_speech_prob": s.no_speech_prob,
+            "compression_ratio": s.compression_ratio,
+            "temperature": s.temperature,
             "words": [
                 {"start": w.start, "end": w.end, "word": w.word, "p": w.probability}
                 for w in (s.words or [])
@@ -129,12 +131,15 @@ async def transcription_task(queue, transcript_path, ws):
                 sl().warning("Transcription failed.")
                 out.write("(Failed to transcribe)\n")
                 continue
+
             for seg in result["segments"]:
                 seg["start"] += offset
                 seg["end"] += offset
                 for w in seg["words"]:
                     w["start"] += offset
                     w["end"] += offset
+                seg["language"] = result["language"]
+                seg["language_probability"] = result["language_probability"]
                 out.write(json.dumps(seg, ensure_ascii=False) + "\n")
 
             for seg in result["segments"]:

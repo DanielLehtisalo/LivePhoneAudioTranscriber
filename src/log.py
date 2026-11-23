@@ -1,7 +1,7 @@
 import json
 import logging
 
-def setup_logger(name, file_path, level=logging.DEBUG):
+def setup_logger(name, file_path, level=logging.DEBUG, console_log=False):
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
@@ -13,18 +13,20 @@ def setup_logger(name, file_path, level=logging.DEBUG):
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    console = logging.StreamHandler()
-    console.setFormatter(formatter)
+    if console_log:
+        console = logging.StreamHandler()
+        console.setFormatter(formatter)
+
+        logger.addHandler(console)
 
     file = logging.FileHandler(file_path, encoding="utf-8")
     file.setFormatter(formatter)
 
-    logger.addHandler(console)
     logger.addHandler(file)
     return logger
 
 logger = None
-_sys_log = setup_logger("lpat-sys-logger", "sys.log")
+_sys_log = setup_logger("lpat-sys-logger", "sys.log",console_log=True)
 
 def sys_log():
     """Returns the system logger"""
