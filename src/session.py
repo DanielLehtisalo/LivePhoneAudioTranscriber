@@ -6,6 +6,7 @@ import json
 import asyncio
 import struct
 import time
+from enum import Enum
 
 import wave
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -13,7 +14,7 @@ from starlette.websockets import WebSocketState
 
 import log
 from log import sys_log as sl
-from transcriber import transcription_task
+from transcriber import transcription_task, complete_transcription
 from segmenter import Segmenter
 
 from constants import TIMING_TOLERANCE, PACKET_SPACING
@@ -22,6 +23,12 @@ BASE_DIR = Path(os.getcwd())
 SESSIONS_DIR = BASE_DIR / "sessions"
 
 HEADER = struct.Struct("<Id")
+
+class Session_State(Enum):
+    Waiting = 1
+    Recording = 2
+    Transcribing = 3
+    Finished = 4
 
 class Session():
     def __init__(self, transcriber, session_id):
@@ -43,6 +50,8 @@ class Session():
 
         self.last_arrival = None
 
+        self.state = Session_State.Waiting
+
     
     async def connect(self, ws: WebSocket):
         self.ws = ws
@@ -61,7 +70,9 @@ class Session():
                 if msg.get("text") is not None:
                     data = json.loads(msg["text"])
 
-                    if data["type"] == "start":
+                    if data["type"] == "start" and self.state == Session_State.Waiting:
+                        self.state = Session_State.Recording
+                        
                         self.sample_rate = data["sampleRate"]
 
                         asyncio.create_task(
@@ -75,12 +86,13 @@ class Session():
                         self.wav.setframerate(self.sample_rate)
                         sl().info(f"Start received for session {self.id}")
                         self.log.info(f"START. Original request: {msg}")
-                    elif data["type"] == "stop":
+                        self.log.info("== Recording started ==")
+                    elif data["type"] == "stop" and self.state == Session_State.Recording:
                         sl().info(f"Stop received for session {self.id}")
                         self.log.info(f"STOP. Original request: {msg}")
                         break
 
-                elif msg.get("bytes") is not None:
+                elif msg.get("bytes") is not None and self.state == Session_State.Recording:
                     raw = msg["bytes"]
                     seq, clientms = HEADER.unpack_from(raw)
                     audio = raw[HEADER.size:]
@@ -106,4 +118,12 @@ class Session():
         finally:
             if(self.wav):
                 self.wav.close()
+
+            self.log.info("== Recording ended ==")
+            self.state = Session_State.Transcribing
+            from server import offline_transcriber
+            self.log.info("== Final transcription started ==")
+            await complete_transcription(self.dir / "audio-original.wav", offline_transcriber, self.dir / "transcript_final.jsonl", self.sample_rate)
+            self.log.info("== Final transcription finished ==")
+            self.state = Session_State.Finished
             self.log.info("== End of log ==")

@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 import numpy as np
 import json
-
+from log import sys_log as sl
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 MODELS_DIR = BASE_DIR / "models"
@@ -42,25 +42,27 @@ def init_worker(model_name, device="cuda", compute_type="float16"):
         _models[model_name] = new_model
 
 
-def transcribe(audio, language=None, initial_prompt=None, model=None):
-    global _models
+DEFAULT_OPTS = dict(
+    task="transcribe",
+    beam_size=5,
+    temperature=0.0,
+    condition_on_previous_text=False,
+    word_timestamps=True,
+)
+
+def transcribe(audio, language=None, initial_prompt=None, model=None, **extra):
     if not _models:
         sl().warning("No models loaded, transcription task missed.")
         raise RuntimeError("No models loaded")
 
-    if model is None:
-        _model = _default_model_name
-    else:
-        _model = model
-    segments, info = _models[_model].transcribe(
+    name = model or _default_model_name
+    opts = {**DEFAULT_OPTS, **extra}
+
+    segments, info = _models[name].transcribe(
         audio,
         language=language,
-        task="transcribe",
         initial_prompt=initial_prompt,
-        beam_size=5,
-        temperature=0.0,
-        condition_on_previous_text=False,
-        word_timestamps=True,
+        **opts
     )
     out = []
     for s in segments:
@@ -80,10 +82,45 @@ def transcribe(audio, language=None, initial_prompt=None, model=None):
     return {
         "language": info.language,
         "language_probability": info.language_probability,
+        "options": {"language": language, **opts},
         "segments": out,
     }
 
-from log import sys_log as sl
+def _load_wav(path):
+    import wave
+    with wave.open(str(path), "rb") as w:
+        if w.getsampwidth() != 2:
+            raise ValueError(f"{path.name}: expected 16-bit PCM got {8 * w.getsampwidth()}-bit")
+        channels = w.getnchannels()
+        file_rate = w.getframerate()
+        frames = w.readframes(w.getnframes())
+    audio = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1)
+    return audio, file_rate
+
+def _load_audio(path, sample_rate):
+    import soxr
+
+    path = Path(path)
+    if path.suffix.lower() == ".wav":
+        audio, file_rate = _load_wav(path)
+        if file_rate != sample_rate:
+            raise ValueError(
+                f"{path.name}: wav is {file_rate} Hz expected {sample_rate} Hz"
+            )
+    else:
+        audio = np.fromfile(path, dtype="<i2").astype(np.float32) / 32768.0
+        file_rate = sample_rate
+
+    if file_rate != 16000:
+        audio = soxr.resample(audio, file_rate, 16000, quality="HQ")
+    return audio
+
+def transcribe_file(path, sample_rate, **kwargs):
+    return transcribe(_load_audio(path, sample_rate), **kwargs)
+
+
 
 class Transcriber:
     def __init__(self):
@@ -100,9 +137,8 @@ class Transcriber:
             initargs=(self.model_name,),
         )
 
-    async def run(self, audio, **opts):
+    async def _submit(self, call):
         loop = asyncio.get_running_loop()
-        call = functools.partial(transcribe, audio, **opts)
         try:
             return await loop.run_in_executor(self._executor, call)
         except BrokenProcessPool:
@@ -110,6 +146,12 @@ class Transcriber:
             self._executor.shutdown(wait=False, cancel_futures=True)
             self.start()
             raise
+
+    async def run(self, audio, **opts):
+        return await self._submit(functools.partial(transcribe, audio, **opts))
+
+    async def run_file(self, path, sample_rate, **opts):
+        return await self._submit(functools.partial(transcribe_file, str(path), sample_rate, **opts))
 
     async def warm_up(self):
         await self.run(np.zeros(16000, dtype=np.float32))
@@ -173,3 +215,46 @@ async def transcription_task(queue, transcriber, transcript_path, ws):
                 })
             
             out.flush()
+from datetime import datetime, timezone
+async def complete_transcription(audio_file_path, transcriber: Transcriber, transcript_path: str, sample_rate=16000):
+    """Completely transcribes a file"""
+    try:
+        result = await transcriber.run_file(
+            audio_file_path,
+            sample_rate,
+            language=None,
+            vad_filter=True,
+            multilingual=True,
+        )
+    except Exception as e:
+        sl().error(f"Final transcription failed: {e!r}")
+        raise
+
+    tmp_path = transcript_path.with_name(transcript_path.name + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as out:
+        out.write(json.dumps({
+            "type": "meta",
+            "source": audio_file_path.name,
+            "source_sha256": "TODO",
+            "sample_rate": sample_rate,
+            "model": transcriber.model_name,
+            "options": result["options"],
+            "language": result["language"],
+            "language_probability": result["language_probability"],
+            "started": "TODO",
+            "finished": datetime.now(timezone.utc).isoformat(),
+            "origin": "Automatic transcription",
+        }, ensure_ascii=False) + "\n")
+
+        for seg in result["segments"]:
+            seg["type"] = "segment"
+            seg["start_sample"] = round(seg["start"] * sample_rate)
+            seg["end_sample"] = round(seg["end"] * sample_rate)
+            out.write(json.dumps(seg, ensure_ascii=False) + "\n")
+
+        out.flush()
+        os.fsync(out.fileno())
+    # Avoiding replacing a previous transcription with an unfinished one.
+    os.replace(tmp_path, transcript_path)
+    sl().info("Final transcription done.")
+    return
