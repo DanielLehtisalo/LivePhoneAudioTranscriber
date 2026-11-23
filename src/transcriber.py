@@ -9,26 +9,50 @@ from concurrent.futures.process import BrokenProcessPool
 import numpy as np
 import json
 
-_model = None
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+MODELS_DIR = BASE_DIR / "models"
+
+_models = {}
+_default_model_name = None
+
+_cuda_loaded = False
 def _add_cuda_dlls():
-    if os.name != "nt":
-        return
-    for sp in site.getsitepackages():
-        for sub in ("nvidia/cublas/bin", "nvidia/cudnn/bin"):
-            dll_dir = Path(sp) / sub
-            if dll_dir.is_dir():
-                os.add_dll_directory(str(dll_dir))
-                os.environ["PATH"] = str(dll_dir) + os.pathsep + os.environ["PATH"]
+    global _cuda_loaded
+    if not _cuda_loaded:
+        _cuda_loaded = True
+        if os.name != "nt":
+            return
+        for sp in site.getsitepackages():
+            for sub in ("nvidia/cublas/bin", "nvidia/cudnn/bin"):
+                dll_dir = Path(sp) / sub
+                if dll_dir.is_dir():
+                    os.add_dll_directory(str(dll_dir))
+                    os.environ["PATH"] = str(dll_dir) + os.pathsep + os.environ["PATH"]
 
-def init_worker(model_path, device="cuda", compute_type="float16"):
-    global _model
-    _add_cuda_dlls()
+def init_worker(model_name, device="cuda", compute_type="float16"):
     from faster_whisper import WhisperModel
-    _model = WhisperModel(model_path, device=device, compute_type=compute_type)
+    global _models
+    global _default_model_name
+    if model_name not in _models:
+        _add_cuda_dlls()
+        new_model = WhisperModel(str(MODELS_DIR / model_name), device=device, compute_type=compute_type)
+        if not _models:
+            _default_model_name = model_name
+        _models[model_name] = new_model
 
-def transcribe(audio, language=None, initial_prompt=None):
-    segments, info = _model.transcribe(
+
+def transcribe(audio, language=None, initial_prompt=None, model=None):
+    global _models
+    if not _models:
+        sl().warning("No models loaded, transcription task missed.")
+        raise RuntimeError("No models loaded")
+
+    if model is None:
+        _model = _default_model_name
+    else:
+        _model = model
+    segments, info = _models[_model].transcribe(
         audio,
         language=language,
         task="transcribe",
@@ -59,23 +83,21 @@ def transcribe(audio, language=None, initial_prompt=None):
         "segments": out,
     }
 
-_transcriber = None
 from log import sys_log as sl
 
 class Transcriber:
     def __init__(self):
-        global _transcriber
-        if _transcriber is not None:
-            sl().warning("A transcriber already exists, but it was replaced.")
-        self._executor = None
-        _transcriber = self
+        self.model_name = None
+        pass
 
-    def start(self, MODEL_PATH):
+    def start(self, model_name):
+        if model_name is not None:
+            self.model_name = model_name
         self._executor = ProcessPoolExecutor(
             max_workers=1,
             mp_context=multiprocessing.get_context("spawn"),
             initializer=init_worker,
-            initargs=(str(MODEL_PATH),),
+            initargs=(self.model_name,),
         )
 
     async def run(self, audio, **opts):
@@ -98,7 +120,7 @@ class Transcriber:
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-async def transcription_task(queue, transcript_path, ws):
+async def transcription_task(queue, transcriber, transcript_path, ws):
     client_connected = True
 
     async def send_to_client(payload):
@@ -114,8 +136,7 @@ async def transcription_task(queue, transcript_path, ws):
             client_connected = False
     
     with open(transcript_path, "a", encoding="utf-8") as out:
-        global _transcriber
-        if _transcriber is None:
+        if transcriber is None:
             if sl() is not None:
                 sl().warning("No transcriber initialized.")
         while True:
@@ -126,10 +147,11 @@ async def transcription_task(queue, transcript_path, ws):
             offset = start_sample / 16000
 
             try:
-                result = await _transcriber.run(audio, language=None)
-            except:
-                sl().warning("Transcription failed.")
-                out.write("(Failed to transcribe)\n")
+                result = await transcriber.run(audio, language=None)
+            except Exception as e:
+                sl().warning(f"Transcription failed. {e}")
+                out.write(json.dumps({"failed": True, "start_sample": start_sample,
+                      "error": str(e)}) + "\n")
                 continue
 
             for seg in result["segments"]:
@@ -151,4 +173,3 @@ async def transcription_task(queue, transcript_path, ws):
                 })
             
             out.flush()
-        out.close()

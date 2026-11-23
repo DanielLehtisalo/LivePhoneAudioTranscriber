@@ -4,7 +4,7 @@ Transcribe audio from a phone in the local network live, without installing any 
 
 Please do not run LPAT without informing everyone present as most jurisdictions require you to get consent for recording from all parties being recorded.
 
-## Running
+## Running (Windows)
 - Run setup.py
 - Run lpat.py
 

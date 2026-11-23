@@ -25,15 +25,12 @@ from contextlib import asynccontextmanager
 from session import Session
 
 from log import sys_log as sl
+from constants import LIVE_MODEL_NAME, OFFLINE_MODEL_NAME
 
 BASE_DIR = Path(os.getcwd())
 STATIC_DIR = BASE_DIR / "static"
 CERT_DIR = BASE_DIR / "certs"
 SESSIONS_DIR = BASE_DIR / "sessions"
-MODELS_DIR = BASE_DIR / "models"
-MODEL_PATH = MODELS_DIR / "large-v3-turbo"
-
-
 
 
 def get_lan_ip():
@@ -44,16 +41,32 @@ def get_lan_ip():
     except OSError:
         return "127.0.0.1"
 
-transcriber = Transcriber()
+live_transcriber = Transcriber()
+offline_transcriber = Transcriber()
+
+def _on_offline_warmup_done(task: asyncio.Task):
+    if task.cancelled():
+        sl().warning("Offline transcriber warm-up was cancelled.")
+    elif (exc := task.exception()) is not None:
+        sl().error(f"Offline transcriber warm-up failed: {exc!r}")
+    else:
+        sl().info("Offline transcriber ready.")
 
 @asynccontextmanager
 async def lifespan(app):
-    transcriber.start(MODEL_PATH)
-    sl().info("Starting transcriber...")
-    await transcriber.warm_up()
-    sl().info("Transcriber ready.")
+    live_transcriber.start(LIVE_MODEL_NAME)
+    offline_transcriber.start(OFFLINE_MODEL_NAME)
+    sl().info("Warming up live transcriber...")
+    await live_transcriber.warm_up()
+    sl().info("Live transcriber ready.")
+    sl().info("Warming up offline transcriber in the background")
+    app.state.warm_up_task = asyncio.create_task(offline_transcriber.warm_up())
+    app.state.warm_up_task.add_done_callback(_on_offline_warmup_done)
+
     yield
-    transcriber.stop()
+    app.state.warm_up_task.cancel()
+    live_transcriber.stop()
+    offline_transcriber.stop()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -72,10 +85,10 @@ async def audio_ws(ws: WebSocket):
     session_id = uuid.uuid4().hex
     sl().info(f"Starting new session {session_id}")
 
-    new_session = Session(transcriber, session_id)
+    new_session = Session(live_transcriber, session_id)
     _sessions[session_id] = new_session
     try:
-        await new_session.reconnect(ws)
+        await new_session.connect(ws)
     finally:
         _sessions.pop(session_id)
         sl().info(f"Ending session {session_id}")

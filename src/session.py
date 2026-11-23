@@ -44,8 +44,7 @@ class Session():
         self.last_arrival = None
 
     
-    async def reconnect(self, ws: WebSocket):
-        """Allows for a client to reconnect"""
+    async def connect(self, ws: WebSocket):
         self.ws = ws
         await self.loop()
     async def loop(self):
@@ -66,7 +65,7 @@ class Session():
                         self.sample_rate = data["sampleRate"]
 
                         asyncio.create_task(
-                            transcription_task(self.queue, self.dir / "transcript_live.jsonl", self.ws)
+                            transcription_task(self.queue, self.transcriber, self.dir / "transcript_live.jsonl", self.ws)
                         )
                         self.segmenter = Segmenter(self.sample_rate, on_segment=lambda s, audio: self.queue.put_nowait((s, audio)))
 

@@ -11,7 +11,7 @@ CERT_DIR = "certs"
 MODELS_DIR = "models"
 CERT_DURATION = 365
 
-MODELS = ["large-v3-turbo"]
+MODELS = ["large-v3-turbo", "large-v3"]
 
 def main():
     if not os.path.exists(VENV_DIR):
