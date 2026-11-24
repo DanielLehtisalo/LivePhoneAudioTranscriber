@@ -14,6 +14,7 @@ import qrcode
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -92,7 +93,7 @@ async def audio_ws(ws: WebSocket):
     finally:
         _sessions.pop(session_id)
         sl().info(f"Ending session {session_id}")
-        if ws:
+        if ws.application_state == WebSocketState.CONNECTED:
             await ws.close(reason="Session ended.")
 
 def main():

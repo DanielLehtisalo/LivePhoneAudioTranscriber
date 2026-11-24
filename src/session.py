@@ -10,7 +10,7 @@ from enum import Enum
 import hashlib
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from starlette.websockets import WebSocketState
+
 
 import log
 from log import sys_log as sl
@@ -64,7 +64,7 @@ class Session():
                 self.log.info(f"Received request from {self.ws.client.host}")
 
                 if msg["type"] == "websocket.disconnect":
-                    log.info("Websocket disconnected.")
+                    self.log.info("Websocket disconnected.")
                     self.ws = None
                     break
 
@@ -86,6 +86,7 @@ class Session():
                         self.log.info(f"START. Original request: {msg}")
                         self.log.info("== Recording started ==")
                     elif data["type"] == "stop" and self.state == Session_State.Recording:
+                        self.segmenter.finish()
                         sl().info(f"Stop received for session {self.id}")
                         self.log.info(f"STOP. Original request: {msg}")
                         break
@@ -95,7 +96,7 @@ class Session():
                     seq, clientms = HEADER.unpack_from(raw)
                     audio = raw[HEADER.size:]
 
-                    self.log.info(f"Data rx, Audio SHA256: {hashlib.sha256(audio).hexdigest()}")
+                    self.log.debug(f"Data rx, Audio SHA256: {hashlib.sha256(audio).hexdigest()}")
 
                     if seq != self.expected_seq:
                         self.log.warning(f"Gap detected, expected packet {self.expected_seq} got {seq}")
@@ -112,22 +113,23 @@ class Session():
                     self.segmenter.feed(audio)
         except WebSocketDisconnect:
             self.log.warning("Websocket disconnected.")
-            if(self.recorder):
-                self.recorder.close()
         finally:
             if(self.recorder):
                 self.recorder.close()
 
             self.log.info("== Recording ended ==")
 
-            self.state = Session_State.Transcribing
-            from server import offline_transcriber
-            self.log.info("== Final transcription started ==")
-            await complete_transcription(self.dir / "audio.raw", offline_transcriber, self.dir / "transcript_final.jsonl", self.sample_rate)
-            self.log.info("== Final transcription finished ==")
+            if self.state == Session_State.Recording:
+                self.state = Session_State.Transcribing
+                from server import offline_transcriber
+                self.log.info("== Final transcription started ==")
+                await complete_transcription(self.dir / "audio.raw", offline_transcriber, self.dir / "transcript_final.jsonl", self.sample_rate)
+                self.log.info("== Final transcription finished ==")
 
-            self.log.info("Creating wav from raw file.")
-            await self.recorder.convert()
+                self.log.info("Creating wav from raw file.")
+                await self.recorder.convert()
+            else:
+                self.log.info("Never received sound data.")
 
             self.state = Session_State.Finished
             self.log.info("== End of log ==")

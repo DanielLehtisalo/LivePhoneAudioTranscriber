@@ -127,7 +127,7 @@ class Transcriber:
         self.model_name = None
         pass
 
-    def start(self, model_name):
+    def start(self, model_name=None):
         if model_name is not None:
             self.model_name = model_name
         self._executor = ProcessPoolExecutor(

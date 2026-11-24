@@ -20,6 +20,7 @@ class AudioRecorder:
         self.checkpoint_rate = checkpoint_rate
         self.pending = 0
         """How many chunks are pending."""
+        self.closed = False
 
         self.event("recording_started", format="pcm_s16le", channels=1, sample_rate=sample_rate)
 
@@ -45,6 +46,9 @@ class AudioRecorder:
         self.pending = 0
 
     def close(self):
+        if self.closed:
+            return
+        self.closed = True
         self.checkpoint()
         self.event("recording_ended", bytes=self.byte_count,
                    sha256=self.file_hash.hexdigest())
