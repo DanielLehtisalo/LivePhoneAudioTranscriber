@@ -92,6 +92,8 @@ async def audio_ws(ws: WebSocket):
     finally:
         _sessions.pop(session_id)
         sl().info(f"Ending session {session_id}")
+        if ws:
+            await ws.close(reason="Session ended.")
 
 def main():
     ip = get_lan_ip()

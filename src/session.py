@@ -7,14 +7,15 @@ import asyncio
 import struct
 import time
 from enum import Enum
+import hashlib
 
-import wave
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 import log
 from log import sys_log as sl
 from transcriber import transcription_task, complete_transcription
+from audio_processing import AudioRecorder, raw_to_wav
 from segmenter import Segmenter
 
 from constants import TIMING_TOLERANCE, PACKET_SPACING
@@ -37,7 +38,6 @@ class Session():
         self.id = session_id
         self.expected_seq = 0
         self.sample_rate = None
-        self.wav = None
         self.started = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
 
         self.dir = SESSIONS_DIR / f"{self.started}_{session_id}"
@@ -47,6 +47,7 @@ class Session():
         self.log.info("== Start of log ==")
         self.queue = asyncio.Queue()
         self.segmenter = None
+        self.recorder = None
 
         self.last_arrival = None
 
@@ -79,11 +80,8 @@ class Session():
                             transcription_task(self.queue, self.transcriber, self.dir / "transcript_live.jsonl", self.ws)
                         )
                         self.segmenter = Segmenter(self.sample_rate, on_segment=lambda s, audio: self.queue.put_nowait((s, audio)))
+                        self.recorder = AudioRecorder(session_dir=self.dir, sample_rate=self.sample_rate)
 
-                        self.wav = wave.open(str(self.dir / "audio-original.wav"), "wb")
-                        self.wav.setnchannels(1)
-                        self.wav.setsampwidth(2)
-                        self.wav.setframerate(self.sample_rate)
                         sl().info(f"Start received for session {self.id}")
                         self.log.info(f"START. Original request: {msg}")
                         self.log.info("== Recording started ==")
@@ -97,7 +95,7 @@ class Session():
                     seq, clientms = HEADER.unpack_from(raw)
                     audio = raw[HEADER.size:]
 
-                    self.log.info(f"Data rx: {raw[:16]}... Hash: TODO") # TODO add hash
+                    self.log.info(f"Data rx, Audio SHA256: {hashlib.sha256(audio).hexdigest()}")
 
                     if seq != self.expected_seq:
                         self.log.warning(f"Gap detected, expected packet {self.expected_seq} got {seq}")
@@ -109,21 +107,27 @@ class Session():
                             self.log.warning(f"Packet timing is outside of tolerances. Got {diff}s, expected {PACKET_SPACING}s. Seq: {seq}")
                     self.last_arrival = time.monotonic()
 
-                    self.wav.writeframes(audio)
+                    if self.recorder:
+                        self.recorder.write_chunk(seq=seq, audio=audio)
                     self.segmenter.feed(audio)
         except WebSocketDisconnect:
             self.log.warning("Websocket disconnected.")
-            if(self.wav):
-                self.wav.close()
+            if(self.recorder):
+                self.recorder.close()
         finally:
-            if(self.wav):
-                self.wav.close()
+            if(self.recorder):
+                self.recorder.close()
 
             self.log.info("== Recording ended ==")
+
             self.state = Session_State.Transcribing
             from server import offline_transcriber
             self.log.info("== Final transcription started ==")
-            await complete_transcription(self.dir / "audio-original.wav", offline_transcriber, self.dir / "transcript_final.jsonl", self.sample_rate)
+            await complete_transcription(self.dir / "audio.raw", offline_transcriber, self.dir / "transcript_final.jsonl", self.sample_rate)
             self.log.info("== Final transcription finished ==")
+
+            self.log.info("Creating wav from raw file.")
+            await self.recorder.convert()
+
             self.state = Session_State.Finished
             self.log.info("== End of log ==")

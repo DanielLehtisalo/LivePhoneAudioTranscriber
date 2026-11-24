@@ -1,7 +1,10 @@
 - LPAT
     - Server
-        - Transcriber
+        - System log
+        - Transcriber(s)
+            - Live transcriber
+            - Offline transcriber
         - Session(s)
             - Segmenter
-            - Audio processor
-    - Logging
+            - Log
+            - Audio recorder

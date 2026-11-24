@@ -215,9 +215,21 @@ async def transcription_task(queue, transcriber, transcript_path, ws):
                 })
             
             out.flush()
+
+import hashlib
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while block := f.read(1 << 20):
+            h.update(block)
+    return h.finalize().hex()
+
 from datetime import datetime, timezone
 async def complete_transcription(audio_file_path, transcriber: Transcriber, transcript_path: str, sample_rate=16000):
     """Completely transcribes a file"""
+    source_sha256 = await asyncio.to_thread(_sha256_file, audio_file_path)
+    started = datetime.now(timezone.utc).isoformat()
+    
     try:
         result = await transcriber.run_file(
             audio_file_path,
@@ -235,13 +247,13 @@ async def complete_transcription(audio_file_path, transcriber: Transcriber, tran
         out.write(json.dumps({
             "type": "meta",
             "source": audio_file_path.name,
-            "source_sha256": "TODO",
+            "source_sha256": source_sha256,
             "sample_rate": sample_rate,
             "model": transcriber.model_name,
             "options": result["options"],
             "language": result["language"],
             "language_probability": result["language_probability"],
-            "started": "TODO",
+            "started": started,
             "finished": datetime.now(timezone.utc).isoformat(),
             "origin": "Automatic transcription",
         }, ensure_ascii=False) + "\n")
