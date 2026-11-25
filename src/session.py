@@ -87,7 +87,6 @@ class Session():
                         self.log.info(f"START. Original request: {msg}")
                         self.log.info("== Recording started ==")
                     elif data["type"] == "stop" and self.state == Session_State.Recording:
-                        self.segmenter.finish()
                         sl().info(f"Stop received for session {self.id}")
                         self.log.info(f"STOP. Original request: {msg}")
                         break
@@ -140,9 +139,13 @@ class Session():
 
     async def finalize(self, offline_transcriber):
         try:
+            self.log.info("== Final transcription started ==")
             await complete_transcription(audio_file_path=self.dir / "audio.raw", transcriber=offline_transcriber, 
                                          transcript_path=self.dir / "transcript_final.jsonl", sample_rate=self.sample_rate)
+            self.log.info("== Final transcription ended ==")
+            self.log.info("== Conversion from raw to wav started ==")
             await self.recorder.convert()
+            self.log.info("== Conversion from raw to wav ended ==")
             self.state = Session_State.Finished
         finally:
             self.log.info("== End of log ==")

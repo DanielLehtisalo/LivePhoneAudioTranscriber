@@ -86,13 +86,12 @@ async def audio_ws(ws: WebSocket):
     session_id = uuid.uuid4().hex
     sl().info(f"Starting new session {session_id}")
 
-    new_session = Session(transcriber=live_transcriber, session_id=session_id, offline_transcriber=offline_transcriber)
+    new_session = Session(transcriber=live_transcriber, session_id=session_id)
     _sessions[session_id] = new_session
     try:
         await new_session.connect(ws)
     finally:
         _sessions.pop(session_id)
-        new_session.log.c
         sl().info(f"Ending session {session_id}")
         if ws.application_state == WebSocketState.CONNECTED:
             await ws.close(reason="Session ended.")
