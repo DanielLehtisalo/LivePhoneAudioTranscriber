@@ -23,12 +23,12 @@ from transcriber import Transcriber
 from segmenter import Segmenter
 from contextlib import asynccontextmanager
 
-from session import Session
+from session import Session, Session_State
 
 from log import sys_log as sl
 from constants import LIVE_MODEL_NAME, OFFLINE_MODEL_NAME
 
-BASE_DIR = Path(os.getcwd())
+BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 CERT_DIR = BASE_DIR / "certs"
 SESSIONS_DIR = BASE_DIR / "sessions"
@@ -78,7 +78,7 @@ async def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 _sessions = {}
-
+_finalize_tasks = set()
 @app.websocket("/ws")
 async def audio_ws(ws: WebSocket):
     await ws.accept()
@@ -86,15 +86,21 @@ async def audio_ws(ws: WebSocket):
     session_id = uuid.uuid4().hex
     sl().info(f"Starting new session {session_id}")
 
-    new_session = Session(live_transcriber, session_id)
+    new_session = Session(transcriber=live_transcriber, session_id=session_id, offline_transcriber=offline_transcriber)
     _sessions[session_id] = new_session
     try:
         await new_session.connect(ws)
     finally:
         _sessions.pop(session_id)
+        new_session.log.c
         sl().info(f"Ending session {session_id}")
         if ws.application_state == WebSocketState.CONNECTED:
             await ws.close(reason="Session ended.")
+        if new_session.state == Session_State.Transcribing:
+            task = asyncio.create_task(new_session.finalize(offline_transcriber))
+            _finalize_tasks.add(task)
+            task.add_done_callback(_finalize_tasks.discard)
+
 
 def main():
     ip = get_lan_ip()

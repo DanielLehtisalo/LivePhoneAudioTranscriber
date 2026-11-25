@@ -30,7 +30,7 @@ class AudioRecorder:
         self.audio_log.flush()
         os.fsync(self.audio_log.fileno())
 
-    def write_chunk(self, seq, audio):
+    def write_chunk(self, seq, audio, clientms):
         self.audio.write(audio)
         self.file_hash.update(audio)
         self.byte_count += len(audio)

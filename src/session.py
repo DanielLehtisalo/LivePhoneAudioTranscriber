@@ -50,6 +50,7 @@ class Session():
         self.recorder = None
 
         self.last_arrival = None
+        self.last_clientms = None
 
         self.state = Session_State.Waiting
 
@@ -76,7 +77,7 @@ class Session():
                         
                         self.sample_rate = data["sampleRate"]
 
-                        asyncio.create_task(
+                        self.live_task = asyncio.create_task(
                             transcription_task(self.queue, self.transcriber, self.dir / "transcript_live.jsonl", self.ws)
                         )
                         self.segmenter = Segmenter(self.sample_rate, on_segment=lambda s, audio: self.queue.put_nowait((s, audio)))
@@ -100,36 +101,51 @@ class Session():
 
                     if seq != self.expected_seq:
                         self.log.warning(f"Gap detected, expected packet {self.expected_seq} got {seq}")
+                        self.recorder.event("gap", expected_seq=self.expected_seq, got_seq=seq, at_byte=self.recorder.byte_count)
                     self.expected_seq = seq + 1
 
                     if self.last_arrival is not None:
                         diff = time.monotonic() - self.last_arrival
                         if abs(diff - PACKET_SPACING) > TIMING_TOLERANCE:
                             self.log.warning(f"Packet timing is outside of tolerances. Got {diff}s, expected {PACKET_SPACING}s. Seq: {seq}")
+                            self.recorder.event("gap", expected_timing=PACKET_SPACING, recorded_timing=diff, at_seq=seq)
                     self.last_arrival = time.monotonic()
 
+                    if self.last_clientms is not None:
+                        diff = self.last_clientms - clientms
+                        if diff != (PACKET_SPACING * 1000):
+                            self.log.warning(f"Client packet timing isn't what was expected. Got {diff} ms, expected {PACKET_SPACING * 1000} ms. Seq: {seq}")
+                            self.recorder.event("gap", expected_client_timing=PACKET_SPACING * 1000, recorded_timing=diff, at_seq=seq)
+
                     if self.recorder:
-                        self.recorder.write_chunk(seq=seq, audio=audio)
+                        self.recorder.write_chunk(seq=seq, audio=audio, clientms=clientms)
                     self.segmenter.feed(audio)
         except WebSocketDisconnect:
             self.log.warning("Websocket disconnected.")
         finally:
-            if(self.recorder):
-                self.recorder.close()
+            await self.end_recording()
 
-            self.log.info("== Recording ended ==")
+    async def end_recording(self):
+        if(self.state != Session_State.Recording):
+             self.state = Session_State.Finished
+             return
 
-            if self.state == Session_State.Recording:
-                self.state = Session_State.Transcribing
-                from server import offline_transcriber
-                self.log.info("== Final transcription started ==")
-                await complete_transcription(self.dir / "audio.raw", offline_transcriber, self.dir / "transcript_final.jsonl", self.sample_rate)
-                self.log.info("== Final transcription finished ==")
+        self.segmenter.finish()
+        await self.queue.put(None)
+        await self.live_task
 
-                self.log.info("Creating wav from raw file.")
-                await self.recorder.convert()
-            else:
-                self.log.info("Never received sound data.")
+        self.recorder.close()
+        self.state = Session_State.Transcribing
+        self.log.info("== Recording ended ==")
 
+    async def finalize(self, offline_transcriber):
+        try:
+            await complete_transcription(audio_file_path=self.dir / "audio.raw", transcriber=offline_transcriber, 
+                                         transcript_path=self.dir / "transcript_final.jsonl", sample_rate=self.sample_rate)
+            await self.recorder.convert()
             self.state = Session_State.Finished
+        finally:
             self.log.info("== End of log ==")
+            for h in list(self.log.handlers):
+                h.close()
+                self.log.removeHandler(h)

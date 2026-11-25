@@ -225,7 +225,7 @@ def _sha256_file(path):
     return h.hexdigest()
 
 from datetime import datetime, timezone
-async def complete_transcription(audio_file_path, transcriber: Transcriber, transcript_path: str, sample_rate=16000):
+async def complete_transcription(audio_file_path, transcriber: Transcriber, transcript_path: str, sample_rate):
     """Completely transcribes a file"""
     source_sha256 = await asyncio.to_thread(_sha256_file, audio_file_path)
     started = datetime.now(timezone.utc).isoformat()

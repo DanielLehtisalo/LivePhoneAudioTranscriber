@@ -1,4 +1,3 @@
-import json
 import logging
 
 def setup_logger(name, file_path, level=logging.DEBUG, console_log=False):
@@ -25,7 +24,6 @@ def setup_logger(name, file_path, level=logging.DEBUG, console_log=False):
     logger.addHandler(file)
     return logger
 
-logger = None
 _sys_log = setup_logger("lpat-sys-logger", "sys.log",console_log=True)
 
 def sys_log():
