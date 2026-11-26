@@ -51,6 +51,7 @@ class Session():
 
         self.last_arrival = None
         self.last_clientms = None
+        self.min_clock_diff = None
 
         self.state = Session_State.Waiting
 
@@ -62,6 +63,7 @@ class Session():
         try:
             while True:
                 msg = await self.ws.receive()
+                arrival_ms = time.time() * 1000
                 self.log.info(f"Received request from {self.ws.client.host}")
 
                 if msg["type"] == "websocket.disconnect":
@@ -81,7 +83,7 @@ class Session():
                             transcription_task(self.queue, self.transcriber, self.dir / "transcript_live.jsonl", self.ws)
                         )
                         self.segmenter = Segmenter(self.sample_rate, on_segment=lambda s, audio: self.queue.put_nowait((s, audio)))
-                        self.recorder = AudioRecorder(session_dir=self.dir, sample_rate=self.sample_rate)
+                        self.recorder = AudioRecorder(session_dir=self.dir, session_id=self.id, sample_rate=self.sample_rate)
 
                         sl().info(f"Start received for session {self.id}")
                         self.log.info(f"START. Original request: {msg}")
@@ -95,6 +97,14 @@ class Session():
                     raw = msg["bytes"]
                     seq, clientms = HEADER.unpack_from(raw)
                     audio = raw[HEADER.size:]
+
+                    if self.min_clock_diff is not None:
+                        diff = arrival_ms - clientms
+                        # Supports the clocks being out of sync in either direction.
+                        if abs(diff) < abs(self.min_clock_diff):
+                            self.min_clock_diff = diff
+                    else:
+                        self.min_clock_diff = arrival_ms - clientms
 
                     self.log.debug(f"Data rx, Audio SHA256: {hashlib.sha256(audio).hexdigest()}")
 
@@ -117,7 +127,7 @@ class Session():
                             self.recorder.event("gap", expected_client_timing=PACKET_SPACING * 1000, recorded_timing=diff, at_seq=seq)
 
                     if self.recorder:
-                        self.recorder.write_chunk(seq=seq, audio=audio, clientms=clientms)
+                        self.recorder.write_chunk(seq=seq, audio=audio, client_ms=clientms, server_ms=arrival_ms)
                     self.segmenter.feed(audio)
         except WebSocketDisconnect:
             self.log.warning("Websocket disconnected.")
@@ -133,7 +143,7 @@ class Session():
         await self.queue.put(None)
         await self.live_task
 
-        self.recorder.close()
+        self.recorder.close(self.min_clock_diff)
         self.state = Session_State.Transcribing
         self.log.info("== Recording ended ==")
 
