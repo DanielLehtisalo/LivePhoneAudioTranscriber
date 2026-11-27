@@ -1,11 +1,11 @@
 # Live Phone Audio Transcriber (LPAT)
 ![LPAT graphic](assets/graphic.png)
-Transcribe audio from a phone in the local network live, without installing any applications on the phone.
+Transcribe audio from a phone in the local network live, without installing any applications on the phone. Supports multiple clients.
 
 Please do not run LPAT without informing everyone present as most jurisdictions require you to get consent for recording from all parties being recorded.
 
 ## Running verification on examples
-The verification examples are light to run and don't require
+The verification examples are light to run and don't require all of the dependencies that the server does.
 [Read more here](example-sessions/about.md)
 
 ## Running the server (Windows)

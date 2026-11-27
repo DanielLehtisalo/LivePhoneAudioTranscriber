@@ -162,18 +162,18 @@ class Session():
             await complete_transcription(audio_file_path=self.dir / "audio.raw", transcriber=offline_transcriber, 
                                          transcript_path=self.dir / "transcript_final.jsonl", sample_rate=self.sample_rate)
             self.log.info("== Final transcription ended ==")
-            self.log.info("== Conversion from raw to wav started ==")
-            await self.recorder.convert()
-            self.log.info("== Conversion from raw to wav ended ==")
+            
             self.state = Session_State.Finished
         except Exception as e:
             final_status = "failed"
             self.log.error(f"Final transcription failed: {e!r}")
 
         try:
+            self.log.info("== Conversion from raw to wav started ==")
             await self.recorder.convert()
         except Exception as e:
             self.log.error(f"WAV conversion failed: {e!r}")
+        self.log.info("== Conversion from raw to wav ended ==")    
 
         self.log.info("== End of log ==")
         for h in list(self.log.handlers):
