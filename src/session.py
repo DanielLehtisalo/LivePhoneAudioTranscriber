@@ -15,8 +15,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import log
 from log import sys_log as sl
 from transcriber import transcription_task, complete_transcription
-from audio_processing import AudioRecorder, raw_to_wav
+from audio_processing import AudioRecorder
 from segmenter import Segmenter
+
+from signing import sign_session, PUBLIC_KEY_PATH
+from verify import verify_session
+from constants import LIVE_MODEL_NAME, OFFLINE_MODEL_NAME
 
 from constants import TIMING_TOLERANCE, PACKET_SPACING
 
@@ -53,6 +57,8 @@ class Session():
         self.last_clientms = None
         self.min_clock_diff = None
 
+        self.start_info = None
+
         self.state = Session_State.Waiting
 
     
@@ -64,6 +70,7 @@ class Session():
             while True:
                 msg = await self.ws.receive()
                 arrival_ms = time.time() * 1000
+                monotic_time = time.monotonic()
                 self.log.info(f"Received request from {self.ws.client.host}")
 
                 if msg["type"] == "websocket.disconnect":
@@ -76,6 +83,7 @@ class Session():
 
                     if data["type"] == "start" and self.state == Session_State.Waiting:
                         self.state = Session_State.Recording
+                        self.start_info = data
                         
                         self.sample_rate = data["sampleRate"]
 
@@ -114,11 +122,11 @@ class Session():
                     self.expected_seq = seq + 1
 
                     if self.last_arrival is not None:
-                        diff = time.monotonic() - self.last_arrival
+                        diff = monotic_time - self.last_arrival
                         if abs(diff - PACKET_SPACING) > TIMING_TOLERANCE:
                             self.log.warning(f"Packet timing is outside of tolerances. Got {diff}s, expected {PACKET_SPACING}s. Seq: {seq}")
                             self.recorder.event("gap", expected_timing=PACKET_SPACING, recorded_timing=diff, at_seq=seq)
-                    self.last_arrival = time.monotonic()
+                    self.last_arrival = monotic_time
 
                     if self.last_clientms is not None:
                         diff = self.last_clientms - clientms
@@ -147,7 +155,8 @@ class Session():
         self.state = Session_State.Transcribing
         self.log.info("== Recording ended ==")
 
-    async def finalize(self, offline_transcriber):
+    async def finalize(self, offline_transcriber, signing_key):
+        final_status = "ok"
         try:
             self.log.info("== Final transcription started ==")
             await complete_transcription(audio_file_path=self.dir / "audio.raw", transcriber=offline_transcriber, 
@@ -157,8 +166,41 @@ class Session():
             await self.recorder.convert()
             self.log.info("== Conversion from raw to wav ended ==")
             self.state = Session_State.Finished
-        finally:
-            self.log.info("== End of log ==")
-            for h in list(self.log.handlers):
-                h.close()
-                self.log.removeHandler(h)
+        except Exception as e:
+            final_status = "failed"
+            self.log.error(f"Final transcription failed: {e!r}")
+
+        try:
+            await self.recorder.convert()
+        except Exception as e:
+            self.log.error(f"WAV conversion failed: {e!r}")
+
+        self.log.info("== End of log ==")
+        for h in list(self.log.handlers):
+            h.close()
+            self.log.removeHandler(h)
+
+        extra = {
+            "recording": {
+                "sample_rate": self.sample_rate,
+                "client": self.start_info,
+                "chunks": self.recorder.chunk_count,
+                "bytes": self.recorder.byte_count,
+                "chain_final": self.recorder.chain.hex(),
+            },
+            "models": {
+                "live": LIVE_MODEL_NAME,
+                "offline": OFFLINE_MODEL_NAME
+            },
+            "final_transcription": final_status,
+        }
+
+        manifest = await asyncio.to_thread(sign_session, self.dir, self.id, signing_key, extra)
+        sl().info(f"Session {self.id} signed ({len(manifest['files'])} files).")
+
+        result = await asyncio.to_thread(verify_session, self.dir, PUBLIC_KEY_PATH)
+        if result["status"] == "intact":
+            sl().info(f"Session {self.id} signing intact.")
+        else:
+            sl().error(f"Session {self.id} failed to sign: {result}")
+        self.state = Session_State.Finished

@@ -1,6 +1,8 @@
 certs/
 sessions/
 models/
+# The public key is purposefully committed.
+keys/private_key.pem
 
 
 # Below is a template python gitignore from

@@ -35,7 +35,7 @@ class AudioRecorder:
         self.pending = 0
         """How many chunks are pending."""
 
-        self.event("recording_started", format="pcm_s16le", channels=1, 
+        self.event("recording_started", session_id=session_id, format="pcm_s16le", channels=1, 
                    sample_rate=sample_rate, index_format="<IddI seq,client_ms,server_ms,len",
                    chain_origin=self.chain.hex())
 

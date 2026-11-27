@@ -27,6 +27,7 @@ from session import Session, Session_State
 
 from log import sys_log as sl
 from constants import LIVE_MODEL_NAME, OFFLINE_MODEL_NAME
+from signing import load_private_key
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
@@ -55,6 +56,8 @@ def _on_offline_warmup_done(task: asyncio.Task):
 
 @asynccontextmanager
 async def lifespan(app):
+    app.state.private_key = load_private_key()
+    sl().info("Private key loaded.")
     live_transcriber.start(LIVE_MODEL_NAME)
     offline_transcriber.start(OFFLINE_MODEL_NAME)
     sl().info("Warming up live transcriber...")
@@ -96,7 +99,7 @@ async def audio_ws(ws: WebSocket):
         if ws.application_state == WebSocketState.CONNECTED:
             await ws.close(reason="Session ended.")
         if new_session.state == Session_State.Transcribing:
-            task = asyncio.create_task(new_session.finalize(offline_transcriber))
+            task = asyncio.create_task(new_session.finalize(offline_transcriber, app.state.private_key))
             _finalize_tasks.add(task)
             task.add_done_callback(_finalize_tasks.discard)
 

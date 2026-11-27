@@ -11,6 +11,7 @@ class ChainReport:
     chunks_read: int
     chunks_verified: int
     message: str
+    session_id: str | None = None
 
     def __str__(self):
         return (f"[{self.result.upper()}] {self.message} (verified {self.chunks_verified}/{self.chunks_read} chunks)")
@@ -29,7 +30,7 @@ def _read_audio_log(path):
     return events, None
 
 
-def verify_chain(session_dir, session_id):
+def verify_chain(session_dir) -> ChainReport:
     """Checks the chain stored in audio_log.jsonl"""
     events, err = _read_audio_log(session_dir / "audio_log.jsonl")
     if err:
@@ -39,11 +40,13 @@ def verify_chain(session_dir, session_id):
     ended = next((e for e in events if e["event"] == "recording_ended"), None)
     checkpoints = [e for e in events if e["event"] == "checkpoint"]
 
-    chain = chain_origin(session_id)
+    
     if started is None:
         return ChainReport("error", 0, 0, "no recording_started event in log")
+    session_id = started.get("session_id")
+    chain = chain_origin(session_id)
     if started.get("chain_origin") != chain.hex():
-        return ChainReport("modified", 0, 0, "chain origin doesn't match the session id")
+        return ChainReport("modified", 0, 0, "chain origin doesn't match the session id", session_id)
 
     file_hash = hashlib.sha256()
     chunks = 0
@@ -61,6 +64,8 @@ def verify_chain(session_dir, session_id):
             if checkpoint["chunks"] < chunks:
                 return f"checkpoint {i} (chunk {checkpoint['chunks']}) is out of order"
             if checkpoint["chunks"] > chunks:
+                # Basically means that the next checkpoint is further along
+                # ... chunk -->CHUNK<-- chunk chunk checkpoint chunk chunk ...
                 return None
             loc = f"between chunk {verified()} and chunk {chunks} (checkpoint {i})"
             if checkpoint["chain"] != chain.hex():
@@ -100,21 +105,21 @@ def verify_chain(session_dir, session_id):
         extra_audio: bool = problem is None and tail_note is None and audio.read(1) != b""
     
     if problem:
-        return ChainReport("modified", chunks, verified(), problem)
+        return ChainReport("modified", chunks, verified(), problem, session_id)
     
     if i < len(checkpoints):
         missing = checkpoints[i]["chunks"]
         return ChainReport("modified", chunks, verified(),
-                           f"log has a checkpoint at chunk {missing}, but the files end at chunk {chunks}")
+                           f"log has a checkpoint at chunk {missing}, but the files end at chunk {chunks}", session_id)
 
     if ended is not None:
         if tail_note or extra_audio:
             return ChainReport("modified", chunks, verified(),
-                               tail_note or "audio.raw has bytes not in index")
+                               tail_note or "audio.raw has bytes not in index", session_id)
         if ended["chunks"] != chunks or ended["chain_final"] != chain.hex() or ended["sha256"] != file_hash.hexdigest():
             return ChainReport("modified", chunks, verified(),
-                               "files do not match recording_ended")
-        return ChainReport("intact", chunks, chunks, "recording completely intact")
+                               "files do not match recording_ended", session_id)
+        return ChainReport("intact", chunks, chunks, "recording completely intact", session_id)
 
     unverified = chunks - verified()
     details = [f"{unverified} chunk(s) after the last checkpoint are unverified"]
@@ -122,4 +127,4 @@ def verify_chain(session_dir, session_id):
         details.append(tail_note)
     if extra_audio:
         details.append("audio.raw has bytes not in index")
-    return ChainReport("interrupted", chunks, verified(), " ".join(details))
+    return ChainReport("interrupted", chunks, verified(), " ".join(details), session_id)
