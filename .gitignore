@@ -2,7 +2,9 @@ certs/
 sessions/
 models/
 # The public key is purposefully committed.
-keys/private_key.pem
+keys/
+*.log
+!example-sessions/**/session.log
 
 
 # Below is a template python gitignore from
@@ -67,7 +69,6 @@ cover/
 *.pot
 
 # Django stuff:
-*.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal

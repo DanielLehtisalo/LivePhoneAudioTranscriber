@@ -24,7 +24,7 @@ class AudioRecorder:
         self.sample_rate = sample_rate
         self.audio = open(session_dir / "audio.raw", "ab")
         self.index = open(session_dir / "chunks.idx", "ab")
-        self.audio_log = open(session_dir / "audio_log.jsonl", "a", encoding="utf-8")
+        self.audio_log = open(session_dir / "audio_log.jsonl", "a", encoding="utf-8", newline="\n")
 
         self.file_hash = hashlib.sha256()
         self.chain = chain_origin(session_id=session_id)

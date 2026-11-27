@@ -67,6 +67,19 @@ def create_signing_key(openssl_path):
     else:
         print("Skipped creating public key.")
 
+def download_models(venv_python):
+    script = (
+        "import sys\n"
+        "from faster_whisper import download_model\n"
+        "out_dir = sys.argv[1]\n"
+        "for name in sys.argv[2:]:\n"
+        "    download_model(name, output_dir=f'{out_dir}/{name}')\n"
+        "    print(f'Model ready: {name}')\n"
+    )
+    print("Downloading missing transcription models. This might take a while.")
+    subprocess.run([venv_python, "-c", script, MODELS_DIR, *MODELS], check=True)
+    print("All models downloaded.")
+
 def main():
     if not os.path.exists(VENV_DIR):
         print(f"Creating virtual environment in '{VENV_DIR}'")
@@ -100,7 +113,6 @@ def main():
         else:
             print("No requirements.txt found. Skipping package installation.")
 
-        from faster_whisper import download_model
         openssl_path = shutil.which("openssl")
         if openssl_path:
             create_certificate(openssl_path)
@@ -108,10 +120,7 @@ def main():
         else:
             print("OpenSSL is not installed, please install it and add it to the system path.")
 
-        print("Downloading missing transcription models. This might take a while.")
-        for name in MODELS:
-            download_model(name, output_dir=f"{MODELS_DIR}/{name}")
-        print("All models downloaded.")
+        download_models(venv_python)
         print("Setup completed.")
 
 if __name__ == "__main__":
