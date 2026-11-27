@@ -4,7 +4,7 @@ import sys
 import venv
 import shutil
 import json
-from faster_whisper import download_model
+
 
 VENV_DIR = "venv"
 CERT_DIR = "certs"
@@ -79,28 +79,40 @@ def main():
     else:  # macOS and Linux
         venv_python = os.path.join(VENV_DIR, "bin", "python")
 
-    if os.path.exists("requirements.txt"):
-        print("Installing dependencies from requirements.txt...")
+    if os.path.exists("min-requirements.txt"):
+        print("Installing minimum dependencies from min-requirements.txt...")
         subprocess.run(
-            [venv_python, "-m", "pip", "install", "-r", "requirements.txt"],
+            [venv_python, "-m", "pip", "install", "-r", "min-requirements.txt"],
             check=True,
         )
-        print("\nDependencies installed complete.")
+        print("\nMinimum dependencies installed.")
     else:
-        print("No requirements.txt found. Skipping package installation.")
+        print("No min-requirements.txt found. Skipping package installation.")
 
-    openssl_path = shutil.which("openssl")
-    if openssl_path:
-        create_certificate(openssl_path)
-        create_signing_key(openssl_path)
-    else:
-        print("OpenSSL is not installed, please install it and add it to the system path.")
+    if len(sys.argv) > 1 and sys.argv[1] == "--full":
+        if os.path.exists("requirements.txt"):
+            print("Installing dependencies from requirements.txt...")
+            subprocess.run(
+                [venv_python, "-m", "pip", "install", "-r", "requirements.txt"],
+                check=True,
+            )
+            print("\nDependencies installed.")
+        else:
+            print("No requirements.txt found. Skipping package installation.")
 
-    print("Downloading missing transcription models. This might take a while.")
-    for name in MODELS:
-        download_model(name, output_dir=f"{MODELS_DIR}/{name}")
-    print("All models downloaded.")
-    print("Setup completed.")
+        from faster_whisper import download_model
+        openssl_path = shutil.which("openssl")
+        if openssl_path:
+            create_certificate(openssl_path)
+            create_signing_key(openssl_path)
+        else:
+            print("OpenSSL is not installed, please install it and add it to the system path.")
+
+        print("Downloading missing transcription models. This might take a while.")
+        for name in MODELS:
+            download_model(name, output_dir=f"{MODELS_DIR}/{name}")
+        print("All models downloaded.")
+        print("Setup completed.")
 
 if __name__ == "__main__":
     main()
