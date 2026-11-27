@@ -1,0 +1,10 @@
+- LPAT
+    - Server
+        - System log
+        - Transcriber(s)
+            - Live transcriber
+            - Offline transcriber
+        - Session(s)
+            - Segmenter
+            - Log
+            - Audio recorder

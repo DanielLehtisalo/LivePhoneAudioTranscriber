@@ -1,4 +1,9 @@
-import web as server
+import sys
 
 if __name__ == "__main__":
-    server.main()
+    if len(sys.argv) > 1 and sys.argv[1] == "verify":
+        import verify
+        verify.main(sys.argv[2:])
+    else:
+        import server
+        server.main()
